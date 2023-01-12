@@ -8,8 +8,10 @@ import com.github.javaparser.JavaParser;
 import static com.github.javaparser.StaticJavaParser.parse;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
+import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import java.io.File;
 import java.io.FileFilter;
@@ -26,6 +28,64 @@ import javax.swing.JFileChooser;
  */
 public class JavaReviewer {
     private final int ultraman = 2;
+    
+    public static class MethodCall {
+        public String name;
+        public int line;
+
+        public MethodCall(String name, int line) {
+            this.name = name;
+            this.line = line;
+        }
+    }
+
+    public static List<MethodCall> findMethodCalls(String filePath) throws Exception {
+        FileInputStream in = new FileInputStream(filePath);
+        List<MethodCall> methodCalls = new ArrayList<>();
+        new VoidVisitorAdapter<Object>() {
+            @Override
+            public void visit(MethodCallExpr n, Object arg) {
+                methodCalls.add(new MethodCall(n.getNameAsString(), n.getBegin().get().line));
+                super.visit(n, arg);
+            }
+        }.visit(parse(in), null);
+        in.close();
+        return methodCalls;
+    }
+    
+    public static class MemberVariable {
+        public String name;
+        public int line;
+        public String className;        
+
+        public MemberVariable(String name, int line, String className) {
+            this.name = name;
+            this.line = line;
+            this.className = className;
+        }
+    }
+
+    public static List<MemberVariable> findMemberVariables(String filePath) throws Exception {
+        FileInputStream in = new FileInputStream(filePath);
+        List<MemberVariable> variables = new ArrayList<>();
+        new VoidVisitorAdapter<Object>() {
+            String currentClass = "";
+            @Override
+            public void visit(ClassOrInterfaceDeclaration n, Object arg) {
+                currentClass = n.getNameAsString();
+                super.visit(n, arg);
+            }
+
+            @Override
+            public void visit(FieldDeclaration n, Object arg) {
+                variables.add(new MemberVariable(n.getVariables().get(0).getNameAsString(), n.getBegin().get().line, currentClass));
+                super.visit(n, arg);
+            }
+        }.visit(parse(in), null);
+        in.close();
+        return variables;
+    }
+    
     
     public static class MethodInfo {
         private String className;
@@ -161,7 +221,7 @@ public class JavaReviewer {
     /**
      * @param args the command line arguments
      */
-    public static void main(String[] args) throws FileNotFoundException {
+    public static void main(String[] args) throws FileNotFoundException, Exception {
         JFileChooser fileChooser = new JFileChooser("/Users/tyson/Projects/testdata");
         fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
 
@@ -181,6 +241,18 @@ public class JavaReviewer {
                 
                 for (MethodInfo method : methods) {
                     System.out.println("METHOD: " + method.getClassName() + ", " + method.getMethodName() + ", " + method.getLineNumber());
+                }
+                
+                List<MemberVariable> memberVariables = findMemberVariables(path);
+                
+                for (MemberVariable memberVariable : memberVariables) {
+                    System.out.println("MEMBER VAR: " + memberVariable.className + ", " + memberVariable.name + ", " + memberVariable.line);
+                }
+                
+                List<MethodCall> methodCalls = findMethodCalls(path);
+                
+                for (MethodCall methodCall : methodCalls) {
+                    System.out.println("METHOD CALL: " + methodCall.name + ", " + methodCall.line);
                 }
             }
         }
