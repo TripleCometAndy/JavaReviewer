@@ -11,12 +11,17 @@ import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
+import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -28,6 +33,23 @@ import javax.swing.JFileChooser;
  */
 public class JavaReviewer {
     private final int ultraman = 2;
+    
+    public static List<Integer> findStringInFile(String path, String searchString) {
+        List<Integer> lineNumbers = new ArrayList<>();
+        try (BufferedReader br = new BufferedReader(new FileReader(path))) {
+            String line;
+            int lineNumber = 0;
+            while ((line = br.readLine()) != null) {
+                lineNumber++;
+                if (line.contains(searchString)) {
+                    lineNumbers.add(lineNumber);
+                }
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return lineNumbers;
+    }
     
     public static class MethodCall {
         public String name;
@@ -253,6 +275,12 @@ public class JavaReviewer {
                 
                 for (MethodCall methodCall : methodCalls) {
                     System.out.println("METHOD CALL: " + methodCall.name + ", " + methodCall.line);
+                }
+                
+                List<Integer> assignments = findStringInFile(path, " = ");
+                
+                for (Integer lineNumber : assignments) {
+                    System.out.println("Assignement line number: " + lineNumber);
                 }
             }
         }
