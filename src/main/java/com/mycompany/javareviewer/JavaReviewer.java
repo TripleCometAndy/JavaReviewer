@@ -14,6 +14,7 @@ import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
+import com.github.javaparser.ast.stmt.IfStmt;
 import com.github.javaparser.ast.stmt.Statement;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import java.io.BufferedReader;
@@ -33,6 +34,22 @@ import javax.swing.JFileChooser;
  */
 public class JavaReviewer {
     private final int ultraman = 2;
+    
+    public static List<Integer> getIfStatementLineNumbers(String filePath) {
+        List<Integer> lineNumbers = new ArrayList<>();
+
+        try (FileInputStream in = new FileInputStream(filePath)) {
+            CompilationUnit cu = parse(in);
+
+            cu.findAll(IfStmt.class).forEach(ifStmt -> {
+                lineNumbers.add(ifStmt.getRange().get().begin.line);
+            });
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return lineNumbers;
+    }
     
     public static List<Integer> findStringInFile(String path, String searchString) {
         List<Integer> lineNumbers = new ArrayList<>();
@@ -281,6 +298,12 @@ public class JavaReviewer {
                 
                 for (Integer lineNumber : assignments) {
                     System.out.println("Assignement line number: " + lineNumber);
+                }
+                
+                List<Integer> ifStatements = getIfStatementLineNumbers(path);
+                
+                for (Integer lineNumber : ifStatements) {
+                    System.out.println("IF STATEMENT: " + lineNumber);
                 }
             }
         }
