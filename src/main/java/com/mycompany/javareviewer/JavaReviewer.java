@@ -42,6 +42,13 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.diff.Edit;
+import org.eclipse.jgit.diff.RawTextComparator;
+import org.eclipse.jgit.patch.FileHeader;
+import org.eclipse.jgit.patch.HunkHeader;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.util.io.DisabledOutputStream;
 
 /**
  *
@@ -50,49 +57,40 @@ import org.eclipse.jgit.diff.DiffEntry;
 public class JavaReviewer {
     private final int ultraman = 2;
     
-    public static class Changes {
-        int startLine;
-        int endLine;
-        String filePath;
+    private static void getChanges(String repoPath, String oldHash, String newHash) throws IOException {
 
-        public Changes(int startLine, int endLine, String filePath) {
-            this.startLine = startLine;
-            this.endLine = endLine;
-            this.filePath = filePath;
-        }
-    }
-    public static List<Changes> getChanges(String repoPath, String oldHash, String newHash) throws Exception {
-        Repository repository = Git.open(Paths.get(repoPath).toFile()).getRepository();
-        ObjectReader reader = repository.newObjectReader();
-        CanonicalTreeParser oldTreeIter = new CanonicalTreeParser();
-        ObjectId old = repository.resolve(oldHash + "^{tree}");
-        oldTreeIter.reset(reader, old);
-        CanonicalTreeParser newTreeIter = new CanonicalTreeParser();
-        ObjectId head = repository.resolve(newHash + "^{tree}");
-        newTreeIter.reset(reader, head);
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        DiffFormatter df = new DiffFormatter(out);
-        df.setRepository(repository);
-        List<DiffEntry> diffs= df.scan(oldTreeIter, newTreeIter);
-        df.close();
-        List<Changes> changesList = new ArrayList<Changes>();
-        for (DiffEntry diff : diffs) {
-            String filePath = diff.getNewPath();
-            df.format(diff);
-            String diffText = out.toString("UTF-8");
-            String[] lines = diffText.split("\n");
-            for (String line : lines) {
-                if (line.startsWith("@@")) {
-                    String[] range = line.split(" ")[1].split(",");
-                    int startLine = Integer.parseInt(range[0].substring(1));
-                    int endLine = startLine + Integer.parseInt(range[1]) - 1;
-                    Changes changes = new Changes(startLine, endLine, filePath);
-                    changesList.add(changes);
+        try (Repository repository = Git.open(new File(repoPath)).getRepository()) {
+            ObjectId oldId = repository.resolve(oldHash);
+            ObjectId newId = repository.resolve(newHash);
+
+            try (RevWalk revWalk = new RevWalk(repository)) {
+                RevCommit oldCommit = revWalk.parseCommit(oldId);
+                RevCommit newCommit = revWalk.parseCommit(newId);
+
+                try (DiffFormatter diffFormatter = new DiffFormatter(DisabledOutputStream.INSTANCE)) {
+                    diffFormatter.setRepository(repository);
+                    diffFormatter.setDiffComparator(RawTextComparator.WS_IGNORE_ALL);
+                    diffFormatter.setDetectRenames(true);
+
+                    List<DiffEntry> diffs = diffFormatter.scan(oldCommit.getTree(), newCommit.getTree());
+                    for (DiffEntry diff : diffs) {
+                        System.out.println("Change type: " + diff.getChangeType());
+                        System.out.println("Old file path: " + diff.getOldPath());
+                        System.out.println("New file path: " + diff.getNewPath());
+
+                        if (diff.getChangeType() != DiffEntry.ChangeType.DELETE) {
+                            FileHeader fileHeader = diffFormatter.toFileHeader(diff);
+                            for (HunkHeader hunk : fileHeader.getHunks()) {
+                                for (Edit edit : hunk.toEditList()) {
+                                    System.out.println("Line range: " + edit.getBeginA() + "-" + edit.getEndA() + " to " + edit.getBeginB() + "-" + edit.getEndB());
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            out.reset();
         }
-        return changesList;
+        
     }
     
     public static class NonEmptyDiamond {
@@ -693,11 +691,7 @@ public class JavaReviewer {
            
         }
         
-        List<Changes> changes = getChanges("C:/Users/Andy/projects/JavaReviewer/JavaReviewer", "b6ad94d36d38303b8c3a28b49a97d364d4981ac7", "4f3e9563d56502e906f57c284b842e43ddd0a9e5");
-
-        for (Changes change : changes) {
-            System.out.println("CHANGE: " + change.filePath + ", " + change.startLine + ", " + change.endLine);
-        }
+        getChanges("C:/Users/Andy/projects/JavaReviewer/JavaReviewer", "4f3e9563d56502e906f57c284b842e43ddd0a9e5", "2456f52208d087bf9d68ac757c94073e4d2a7de2");
         
         while (fileChooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
