@@ -7,26 +7,41 @@ package com.mycompany.javareviewer;
 import com.github.javaparser.JavaParser;
 import static com.github.javaparser.StaticJavaParser.parse;
 import com.github.javaparser.ast.CompilationUnit;
+import com.github.javaparser.ast.Node;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.AssignExpr;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.expr.NameExpr;
+import com.github.javaparser.ast.expr.ObjectCreationExpr;
+import com.github.javaparser.ast.expr.StringLiteralExpr;
 import com.github.javaparser.ast.stmt.ExpressionStmt;
 import com.github.javaparser.ast.stmt.IfStmt;
+import com.github.javaparser.ast.stmt.ReturnStmt;
 import com.github.javaparser.ast.stmt.Statement;
+import com.github.javaparser.ast.type.Type;
 import com.github.javaparser.ast.visitor.VoidVisitorAdapter;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileFilter;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import javax.swing.JFileChooser;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.diff.DiffEntry;
 
 /**
  *
@@ -34,6 +49,396 @@ import javax.swing.JFileChooser;
  */
 public class JavaReviewer {
     private final int ultraman = 2;
+    
+    public static class Changes {
+        int startLine;
+        int endLine;
+        String filePath;
+
+        public Changes(int startLine, int endLine, String filePath) {
+            this.startLine = startLine;
+            this.endLine = endLine;
+            this.filePath = filePath;
+        }
+    }
+    public static List<Changes> getChanges(String repoPath, String oldHash, String newHash) throws Exception {
+        Repository repository = Git.open(Paths.get(repoPath).toFile()).getRepository();
+        ObjectReader reader = repository.newObjectReader();
+        CanonicalTreeParser oldTreeIter = new CanonicalTreeParser();
+        ObjectId old = repository.resolve(oldHash + "^{tree}");
+        oldTreeIter.reset(reader, old);
+        CanonicalTreeParser newTreeIter = new CanonicalTreeParser();
+        ObjectId head = repository.resolve(newHash + "^{tree}");
+        newTreeIter.reset(reader, head);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DiffFormatter df = new DiffFormatter(out);
+        df.setRepository(repository);
+        List<DiffEntry> diffs= df.scan(oldTreeIter, newTreeIter);
+        df.close();
+        List<Changes> changesList = new ArrayList<Changes>();
+        for (DiffEntry diff : diffs) {
+            String filePath = diff.getNewPath();
+            df.format(diff);
+            String diffText = out.toString("UTF-8");
+            String[] lines = diffText.split("\n");
+            for (String line : lines) {
+                if (line.startsWith("@@")) {
+                    String[] range = line.split(" ")[1].split(",");
+                    int startLine = Integer.parseInt(range[0].substring(1));
+                    int endLine = startLine + Integer.parseInt(range[1]) - 1;
+                    Changes changes = new Changes(startLine, endLine, filePath);
+                    changesList.add(changes);
+                }
+            }
+            out.reset();
+        }
+        return changesList;
+    }
+    
+    public static class NonEmptyDiamond {
+        public int startLine;
+        public int endLine;
+    }
+
+    public static List<NonEmptyDiamond> getNonEmptyDiamondOperators(String fileName) throws Exception {
+        List<NonEmptyDiamond> nonEmptyDiamonds = new ArrayList<>();
+
+        FileInputStream in = new FileInputStream(fileName);
+        CompilationUnit cu = parse(in);
+
+        cu.findAll(ObjectCreationExpr.class).forEach(oce -> {
+            if (oce.getType().isClassOrInterfaceType() && oce.getType().asClassOrInterfaceType().getTypeArguments().isPresent()
+                && !oce.getType().asClassOrInterfaceType().getTypeArguments().get().isEmpty()
+                && oce.getParentNode().isPresent() && oce.getParentNode().get() instanceof VariableDeclarator) {
+                NonEmptyDiamond nonEmptyDiamond = new NonEmptyDiamond();
+                nonEmptyDiamond.startLine = oce.getBegin().map(p -> p.line).orElse(-1);
+                nonEmptyDiamond.endLine = oce.getEnd().map(p -> p.line).orElse(-1);
+                nonEmptyDiamonds.add(nonEmptyDiamond);
+            }
+        });
+
+        return nonEmptyDiamonds;
+    }
+    
+    public static class ChainedMethodCall {
+        public int startLine;
+        public int endLine;
+        public String methodCall;
+    }
+
+    public static List<ChainedMethodCall> getChainedMethodCalls(String fileName) throws Exception {
+        List<ChainedMethodCall> chainedMethodCalls = new ArrayList<>();
+        FileInputStream in = new FileInputStream(fileName);
+        CompilationUnit cu = parse(in);
+        cu.findAll(MethodCallExpr.class).forEach(mce -> {
+            Node node = mce;
+            while (node instanceof MethodCallExpr) {
+                MethodCallExpr methodCallExpr = (MethodCallExpr) node;
+                node = methodCallExpr.getScope().orElse(null);
+                if(node instanceof MethodCallExpr){
+                    ChainedMethodCall chainedMethodCall = new ChainedMethodCall();
+                    chainedMethodCall.startLine = methodCallExpr.getBegin().map(p -> p.line).orElse(-1);
+                    chainedMethodCall.endLine = methodCallExpr.getEnd().map(p -> p.line).orElse(-1);
+                    chainedMethodCall.methodCall = methodCallExpr.toString();
+                    chainedMethodCalls.add(chainedMethodCall);
+                }
+            }
+        });
+    return chainedMethodCalls;
+}
+    
+    
+    public static class StringLiteral {
+        public final int lineNumber;
+        public final String value;
+
+        public StringLiteral(int lineNumber, String value) {
+            this.lineNumber = lineNumber;
+            this.value = value;
+        }
+    }
+
+    public static List<StringLiteral> findStringLiterals(String filePath) throws Exception {
+        List<StringLiteral> stringLiterals = new ArrayList<>();
+        FileInputStream in = new FileInputStream(filePath);
+        CompilationUnit cu = parse(in);
+        new VoidVisitorAdapter<Void>() {
+            @Override
+            public void visit(StringLiteralExpr n, Void arg) {
+                stringLiterals.add(new StringLiteral(n.getBegin().get().line, n.getValue()));
+                super.visit(n, arg);
+            }
+        }.visit(cu, null);
+        in.close();
+        return stringLiterals;
+    }
+    
+    private static class BooleanMethod {
+        String name;
+        int lineNumber;
+
+        public BooleanMethod(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+    }
+    
+    public static List<BooleanMethod> getBooleanMethods(String filePath) {
+        List<BooleanMethod> booleanMethods = new ArrayList<>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new BooleanMethodVisitor().visit(cu, booleanMethods);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return booleanMethods;
+    }
+
+    private static class BooleanMethodVisitor extends com.github.javaparser.ast.visitor.VoidVisitorAdapter<List<BooleanMethod>> {
+        @Override
+        public void visit(MethodDeclaration md, List<BooleanMethod> arg) {
+            super.visit(md, arg);
+            if (md.getType().toString().equals("boolean") || md.getType().toString().equals("Boolean")) {
+                arg.add(new BooleanMethod(md.getNameAsString(), md.getBegin().get().line));
+            }
+        }
+    }
+    
+    private static class NumericVariable {
+        String name;
+        int lineNumber;
+
+        public NumericVariable(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+    }
+    
+    public static List<NumericVariable> getNumericVariables(String filePath) {
+        List<NumericVariable> numericVariables = new ArrayList<>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new NumericVariableVisitor().visit(cu, numericVariables);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return numericVariables;
+    }
+
+    private static class NumericVariableVisitor extends VoidVisitorAdapter<List<NumericVariable>> {
+        @Override
+        public void visit(VariableDeclarator vd, List<NumericVariable> arg) {
+            super.visit(vd, arg);
+            if (vd.getType().asString().equals("double") || vd.getType().asString().equals("Double") || vd.getType().asString().equals("int") || vd.getType().asString().equals("Integer") || vd.getType().asString().equals("float")) {
+                NameExpr nameExpr = vd.getNameAsExpression();
+                int lineNumber = nameExpr.getBegin().get().line;
+                arg.add(new NumericVariable(nameExpr.getName().asString(), lineNumber));
+            }
+        }
+    }
+    
+    private static class NonVoidMethod {
+        String name;
+        int lineNumber;
+
+        public NonVoidMethod(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+    }
+    
+    public static List<NonVoidMethod> getNonVoidMethods(String filePath) {
+        List<NonVoidMethod> nonVoidMethods = new ArrayList<NonVoidMethod>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new NonVoidMethodVisitor().visit(cu, nonVoidMethods);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return nonVoidMethods;
+    }
+
+    private static class NonVoidMethodVisitor extends com.github.javaparser.ast.visitor.VoidVisitorAdapter<List<NonVoidMethod>> {
+        @Override
+        public void visit(MethodDeclaration md, List<NonVoidMethod> arg) {
+            super.visit(md, arg);
+            if (!md.getType().toString().equals("void")) {
+                arg.add(new NonVoidMethod(md.getNameAsString(), md.getBegin().get().line));
+            }
+        }
+    }
+    
+    private static class PrivateStaticMethod {
+        String name;
+        int lineNumber;
+
+        public PrivateStaticMethod(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+    }
+    
+    private static boolean isFalse() {
+        return true;
+    }
+    
+    public static List<PrivateStaticMethod> getPrivateStaticMethods(String filePath) {
+        List<PrivateStaticMethod> privateStaticMethods = new ArrayList<PrivateStaticMethod>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new PrivateStaticMethodVisitor().visit(cu, privateStaticMethods);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return privateStaticMethods;
+    }
+
+    private static class PrivateStaticMethodVisitor extends com.github.javaparser.ast.visitor.VoidVisitorAdapter<List<PrivateStaticMethod>> {
+        @Override
+        public void visit(MethodDeclaration md, List<PrivateStaticMethod> arg) {
+            super.visit(md, arg);
+            if (md.isPrivate() && md.isStatic()) {
+                arg.add(new PrivateStaticMethod(md.getNameAsString(), md.getBegin().get().line));
+            }
+        }
+    }
+    
+    
+    private static class PrivateMethod {
+        String name;
+        int lineNumber;
+
+        public PrivateMethod(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+    }
+    
+    private boolean isTrue() {
+        return false;
+    }
+    
+    public static List<PrivateMethod> getPrivateMethods(String filePath) {
+        List<PrivateMethod> privateMethods = new ArrayList<PrivateMethod>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new PrivateMethodVisitor().visit(cu, privateMethods);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return privateMethods;
+    }
+
+    private static class PrivateMethodVisitor extends com.github.javaparser.ast.visitor.VoidVisitorAdapter<List<PrivateMethod>> {
+        @Override
+        public void visit(MethodDeclaration md, List<PrivateMethod> arg) {
+            super.visit(md, arg);
+            if (md.isPrivate()) {
+                arg.add(new PrivateMethod(md.getNameAsString(), md.getBegin().get().line));
+            }
+        }
+    }
+    
+    private static class BooleanVariable {
+        String name;
+        int lineNumber;
+
+        public BooleanVariable(String name, int lineNumber) {
+            this.name = name;
+            this.lineNumber = lineNumber;
+        }
+        
+        public String getName() {
+            return name;
+        }
+    }
+    
+    public static List<BooleanVariable> getBooleanVariables(String filePath) {
+        List<BooleanVariable> booleanVariables = new ArrayList<BooleanVariable>();
+        try {
+            FileInputStream in = new FileInputStream(filePath);
+            com.github.javaparser.ast.CompilationUnit cu = parse(in);
+
+            new BooleanVariableVisitor().visit(cu, booleanVariables);
+            in.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return booleanVariables;
+    }
+
+    private static class BooleanVariableVisitor extends VoidVisitorAdapter<List<BooleanVariable>> {
+        @Override
+        public void visit(VariableDeclarator vd, List<BooleanVariable> arg) {
+            super.visit(vd, arg);
+            if (vd.getType().asString().equals("boolean")) {
+                NameExpr nameExpr = vd.getNameAsExpression();
+                int lineNumber = nameExpr.getBegin().get().line;
+                arg.add(new BooleanVariable(nameExpr.getName().asString(), lineNumber));
+            }
+        }
+    }
+    
+    private static class MethodArgument {
+        private String name;
+        private int line;
+        MethodArgument(String name, int line) {
+            this.name = name;
+            this.line = line;
+        }
+        public String getName() {
+            return name;
+        }
+        public int getLine() {
+            return line;
+        }
+    }
+    
+    public static List<MethodArgument> getMethodArguments(String filePath) {
+        List<MethodArgument> arguments = new ArrayList<>();
+
+        try (FileInputStream in = new FileInputStream(filePath)) {
+            CompilationUnit cu = parse(in);
+            cu.findAll(MethodDeclaration.class).forEach(method -> {
+                method.getParameters().forEach(param -> {
+                    arguments.add(new MethodArgument(param.getNameAsString(), param.getRange().get().begin.line));
+                });
+            });
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return arguments;
+    }
+    
+    public static List<Integer> getReturnStatementLineNumbers(String filePath) {
+        List<Integer> lineNumbers = new ArrayList<>();
+
+        try (FileInputStream in = new FileInputStream(filePath)) {
+            CompilationUnit cu = parse(in);
+            cu.findAll(ReturnStmt.class).forEach(returnStmt -> {
+                lineNumbers.add(returnStmt.getRange().get().begin.line);
+            });
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return lineNumbers;
+    }
     
     public static List<Integer> getIfStatementLineNumbers(String filePath) {
         List<Integer> lineNumbers = new ArrayList<>();
@@ -43,6 +448,23 @@ public class JavaReviewer {
 
             cu.findAll(IfStmt.class).forEach(ifStmt -> {
                 lineNumbers.add(ifStmt.getRange().get().begin.line);
+            });
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        return lineNumbers;
+    }
+    
+        public static List<Integer> getElseStatementLineNumbers(String filePath) {
+        List<Integer> lineNumbers = new ArrayList<>();
+
+        try (FileInputStream in = new FileInputStream(filePath)) {
+            CompilationUnit cu = parse(in);
+            cu.findAll(IfStmt.class).forEach(ifStmt -> {
+                if (ifStmt.getElseStmt().isPresent()) {
+                    lineNumbers.add(ifStmt.getElseStmt().get().getRange().get().begin.line);
+                }
             });
         } catch (Exception e) {
             e.printStackTrace();
@@ -264,6 +686,19 @@ public class JavaReviewer {
         JFileChooser fileChooser = new JFileChooser("/Users/tyson/Projects/testdata");
         fileChooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
 
+        if (true) {
+            
+        }
+        else {
+           
+        }
+        
+        List<Changes> changes = getChanges("C:/Users/Andy/projects/JavaReviewer/JavaReviewer", "b6ad94d36d38303b8c3a28b49a97d364d4981ac7", "4f3e9563d56502e906f57c284b842e43ddd0a9e5");
+
+        for (Changes change : changes) {
+            System.out.println("CHANGE: " + change.filePath + ", " + change.startLine + ", " + change.endLine);
+        }
+        
         while (fileChooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
             File file = fileChooser.getSelectedFile();
 
@@ -275,6 +710,8 @@ public class JavaReviewer {
                 for (VariableInfo variable : variables) {
                     System.out.println(variable);
                 }
+                
+                boolean isTrue = false;
                 
                 List<MethodInfo> methods = findMethods(path);
                 
@@ -305,6 +742,79 @@ public class JavaReviewer {
                 for (Integer lineNumber : ifStatements) {
                     System.out.println("IF STATEMENT: " + lineNumber);
                 }
+                
+                List<Integer> elseStatements = getElseStatementLineNumbers(path);
+                
+                for (Integer lineNumber: elseStatements) {
+                    System.out.println("ELSE STATEMENT PRESENT AT: " + lineNumber);
+                }
+                
+                List<Integer> returnStatements = getReturnStatementLineNumbers(path);
+                
+                for (Integer lineNumber: returnStatements) {
+                    System.out.println("RETURN STATEMENT: " + lineNumber);
+                }
+                
+                List<MethodArgument> methodArguments = getMethodArguments(path);
+                
+                for (MethodArgument arg : methodArguments) {
+                    System.out.println("METHOD ARG: " + arg.name + ", " + arg.line);
+                }
+                
+                List<BooleanVariable> booleanVariables = getBooleanVariables(path);
+                
+                for (BooleanVariable booleanVar : booleanVariables) {
+                    System.out.println("BOOL: " + booleanVar.name + ", " + booleanVar.lineNumber);
+                }
+                
+                List<PrivateMethod> privateMethods = getPrivateMethods(path);
+                
+                for (PrivateMethod privateMethod : privateMethods) {
+                    System.out.println("PRIVATE METHOD: " + privateMethod.name + ", " + privateMethod.lineNumber);
+                }
+                
+                List<PrivateStaticMethod> privateStaticMethods = getPrivateStaticMethods(path);
+                
+                for (PrivateStaticMethod privateStaticMethod : privateStaticMethods) {
+                    System.out.println("PRIVATE STATIC METHOD: " + privateStaticMethod.name + privateStaticMethod.lineNumber);
+                }
+                
+                List<NonVoidMethod> nonVoidMethods = getNonVoidMethods(path);
+                
+                for (NonVoidMethod nonVoidMethod : nonVoidMethods) {
+                    System.out.println("NON VOID METHOD: " + nonVoidMethod.name + ", " + nonVoidMethod.lineNumber);
+                }
+                
+                List<NumericVariable> numericVariables = getNumericVariables(path);
+                
+                for (NumericVariable numericVariable : numericVariables) {
+                    System.out.println("NUM: " + numericVariable.name + ", " + numericVariable.lineNumber);
+                }
+                
+                List<BooleanMethod> booleanMethods = getBooleanMethods(path);
+                
+                for (BooleanMethod booleanMethod : booleanMethods) {
+                    System.out.println("BOOL METHOD: " + booleanMethod.name + ", " + booleanMethod.lineNumber);
+                }
+                
+                List<StringLiteral> hardcodedStrings = findStringLiterals(path);
+                
+                for (StringLiteral hardcodedString : hardcodedStrings) {
+                    System.out.println("HARDCODED STRING: " + hardcodedString.value + ", " + hardcodedString.lineNumber);
+                }
+                
+                List<ChainedMethodCall> chainedMethodCalls = getChainedMethodCalls(path);
+                
+                for (ChainedMethodCall chainedMethodCall : chainedMethodCalls) {
+                    System.out.println("CHAINED METHOD CALL AT: " + chainedMethodCall.startLine + ", " + chainedMethodCall.endLine + ", " + chainedMethodCall.methodCall);
+                }
+                
+                List<NonEmptyDiamond> nonEmptyDiamonds = getNonEmptyDiamondOperators(path);
+                
+                for (NonEmptyDiamond nonEmptyDiamond : nonEmptyDiamonds) {
+                    System.out.println("NON EMPTY DIAMOND: " + nonEmptyDiamond.startLine + ", " + nonEmptyDiamond.endLine);
+                }
+                
             }
         }
     }
